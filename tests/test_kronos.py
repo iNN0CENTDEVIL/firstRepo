@@ -94,6 +94,29 @@ def test_batched_builder_matches_per_stock():
     pd.testing.assert_frame_equal(single, batched)
 
 
+def test_batched_builder_handles_ragged_universe():
+    panel = generate_synthetic_ohlcv(n_stocks=4, n_days=400, seed=3)
+    a, b, c, d = list(panel)
+    panel[a].iloc[:350, :] = np.nan   # IPOs late: never gets a full 100-day window
+    panel[b].iloc[151:, :] = np.nan   # delists after row 150
+
+    seen = []
+
+    def spy(windows):
+        for w in windows:
+            assert not w.isnull().values.any()  # no NaN ever reaches predict_batch
+        seen.append(len(windows))
+        return [float(w["close"].iloc[-1]) for w in windows]
+
+    signal = build_forecast_signal_batched(panel, spy, lookback=100, step=10)
+
+    assert signal[a].isna().all()                 # too little history -> no signal
+    assert signal[b].notna().any()                # trades early
+    assert pd.isna(signal[b].iloc[-1])            # no stale signal after delisting
+    assert signal[c].notna().any() and signal[d].notna().any()
+    assert min(seen) < 4                           # some dates had fewer eligible names
+
+
 def test_forecast_pipeline_positive_ic_on_synthetic_momentum():
     panel = generate_synthetic_ohlcv(n_stocks=60, n_days=900, seed=0)
     closes = close_panel(panel)

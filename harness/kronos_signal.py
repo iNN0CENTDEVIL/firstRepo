@@ -93,6 +93,17 @@ def build_forecast_signal(
     return signal
 
 
+def _aligned_panel(ohlcv_panel: dict[str, pd.DataFrame]):
+    """Reindex every ticker onto the union calendar so ragged histories (IPOs,
+    delistings) line up; dates a ticker didn't trade become NaN rows.
+    """
+    calendar = None
+    for df in ohlcv_panel.values():
+        calendar = df.index if calendar is None else calendar.union(df.index)
+    calendar = calendar.sort_values()
+    return {t: df.reindex(calendar) for t, df in ohlcv_panel.items()}, calendar
+
+
 def build_forecast_signal_batched(
     ohlcv_panel: dict[str, pd.DataFrame],
     batch_forecaster: BatchReturnForecaster,
@@ -101,20 +112,33 @@ def build_forecast_signal_batched(
 ) -> pd.DataFrame:
     """Like `build_forecast_signal`, but forecasts every stock for a given date in
     a single `batch_forecaster` call -- the only practical shape for a real
-    GPU-bound model (`KronosForecaster.batch`) across a large universe. Assumes
-    all panels share one date index; every window is exactly `lookback` rows, as
-    Kronos.predict_batch requires. No look-ahead: date t uses only rows <= t.
+    GPU-bound model (`KronosForecaster.batch`) across a large universe.
+
+    Handles ragged universes: panels are aligned to a union calendar, and each
+    date only forecasts tickers with a full, NaN-free `lookback` window (so
+    Kronos.predict_batch's equal-length, no-NaN contract holds). Stocks are left
+    NaN on dates they aren't trading, so no stale signal leaks past a delisting.
+    No look-ahead: date t uses only rows <= t.
     """
-    tickers = list(ohlcv_panel)
-    dates = next(iter(ohlcv_panel.values())).index
+    panel, dates = _aligned_panel(ohlcv_panel)
+    tickers = list(panel)
     columns = {t: {} for t in tickers}
 
     for pos in range(lookback - 1, len(dates), step):
-        windows = [ohlcv_panel[t].iloc[pos - lookback + 1 : pos + 1] for t in tickers]
-        for t, value in zip(tickers, batch_forecaster(windows)):
+        eligible, windows = [], []
+        for t in tickers:
+            window = panel[t].iloc[pos - lookback + 1 : pos + 1]
+            if len(window) == lookback and not window.isnull().values.any():
+                eligible.append(t)
+                windows.append(window)
+        if not windows:
+            continue
+        for t, value in zip(eligible, batch_forecaster(windows)):
             columns[t][dates[pos]] = value
 
     signal = pd.DataFrame({t: pd.Series(columns[t]) for t in tickers}).reindex(dates).ffill()
+    trading = pd.DataFrame({t: panel[t]["close"] for t in tickers}).notna()
+    signal = signal.where(trading)
     signal.index.name = "date"
     return signal
 
