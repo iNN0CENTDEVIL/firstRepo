@@ -59,6 +59,10 @@ inference samples help.
    - `build_forecast_signal` — rolls *any* `ReturnForecaster` across dates into an
      availability-dated cross-sectional signal frame, with **no look-ahead** (each
      date uses only its trailing OHLCV window).
+   - `build_forecast_signal_batched` + `KronosForecaster.batch` — score the whole
+     universe for a date in one `Kronos.predict_batch` call. Per-stock calls are
+     impractical on a real GPU model at universe scale; this is the shape to use
+     live. Verified to match the per-stock builder exactly.
    - `trailing_return_forecaster` — a transparent offline baseline (12-1 momentum
      expressed through the forecaster interface) that stands in for Kronos so the
      whole pipeline runs and self-validates on synthetic OHLCV.

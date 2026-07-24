@@ -7,6 +7,7 @@ import pandas as pd
 from harness.data import close_panel, generate_synthetic_ohlcv
 from harness.kronos_signal import (
     build_forecast_signal,
+    build_forecast_signal_batched,
     ensemble_forecast,
     future_timestamps,
     trailing_return_forecaster,
@@ -81,6 +82,16 @@ def test_build_forecast_signal_no_lookahead():
     # every window ends at or before its own signal date (never looks ahead).
     assert all(d in set(dates) for d in seen_last_dates)
     assert signal.shape[1] == 5
+
+
+def test_batched_builder_matches_per_stock():
+    # batching a whole universe per date must give exactly the per-stock result.
+    panel = generate_synthetic_ohlcv(n_stocks=8, n_days=400, seed=2)
+    single = build_forecast_signal(panel, trailing_return_forecaster, lookback=252, step=20)
+    batched = build_forecast_signal_batched(
+        panel, lambda ws: [trailing_return_forecaster(w) for w in ws], lookback=252, step=20
+    )
+    pd.testing.assert_frame_equal(single, batched)
 
 
 def test_forecast_pipeline_positive_ic_on_synthetic_momentum():

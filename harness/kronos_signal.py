@@ -20,6 +20,8 @@ import pandas as pd
 
 # A window of trailing OHLCV (index = dates, columns include 'close') -> forecast.
 ReturnForecaster = Callable[[pd.DataFrame], float]
+# Many windows -> many forecasts, in one call (GPU-batched at universe scale).
+BatchReturnForecaster = Callable[[list], list]
 
 
 class _SupportsPredict(Protocol):
@@ -91,6 +93,32 @@ def build_forecast_signal(
     return signal
 
 
+def build_forecast_signal_batched(
+    ohlcv_panel: dict[str, pd.DataFrame],
+    batch_forecaster: BatchReturnForecaster,
+    lookback: int = 252,
+    step: int = 1,
+) -> pd.DataFrame:
+    """Like `build_forecast_signal`, but forecasts every stock for a given date in
+    a single `batch_forecaster` call -- the only practical shape for a real
+    GPU-bound model (`KronosForecaster.batch`) across a large universe. Assumes
+    all panels share one date index; every window is exactly `lookback` rows, as
+    Kronos.predict_batch requires. No look-ahead: date t uses only rows <= t.
+    """
+    tickers = list(ohlcv_panel)
+    dates = next(iter(ohlcv_panel.values())).index
+    columns = {t: {} for t in tickers}
+
+    for pos in range(lookback - 1, len(dates), step):
+        windows = [ohlcv_panel[t].iloc[pos - lookback + 1 : pos + 1] for t in tickers]
+        for t, value in zip(tickers, batch_forecaster(windows)):
+            columns[t][dates[pos]] = value
+
+    signal = pd.DataFrame({t: pd.Series(columns[t]) for t in tickers}).reindex(dates).ffill()
+    signal.index.name = "date"
+    return signal
+
+
 class KronosForecaster:
     """Adapter: the pretrained Kronos K-line model as a `ReturnForecaster`, with
     test-time ensembling.
@@ -143,3 +171,25 @@ class KronosForecaster:
             verbose=False,
         )
         return float(pred["close"].iloc[-1] / ohlcv["close"].iloc[-1] - 1.0)
+
+    def batch(self, windows: list[pd.DataFrame]) -> list[float]:
+        """Forecast a list of equal-length OHLCV windows in one call via
+        Kronos.predict_batch -- use with `build_forecast_signal_batched` to score
+        a whole universe per date efficiently.
+        """
+        cols = [c for c in self._COLS if c in windows[0].columns]
+        preds = self.predictor.predict_batch(
+            df_list=[w[cols] for w in windows],
+            x_timestamp_list=[pd.Series(w.index) for w in windows],
+            y_timestamp_list=[future_timestamps(w.index, self.pred_len) for w in windows],
+            pred_len=self.pred_len,
+            T=self.temperature,
+            top_k=self.top_k,
+            top_p=self.top_p,
+            sample_count=self.sample_count,
+            verbose=False,
+        )
+        return [
+            float(p["close"].iloc[-1] / w["close"].iloc[-1] - 1.0)
+            for p, w in zip(preds, windows)
+        ]
