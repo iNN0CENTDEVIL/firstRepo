@@ -74,21 +74,29 @@ def build_forecast_signal(
     signal frame. At date t the forecaster sees only `ohlcv[t-lookback+1 : t+1]`,
     so there is no look-ahead. `step` > 1 forecasts every `step`-th day and
     forward-fills between (cheaper; real use batches on a GPU).
+
+    Handles ragged universes like the batched builder: panels are aligned to a
+    union calendar, a ticker is forecast on a date only when its window has at
+    least `min_periods` rows and no NaN (never feeding a NaN window to the
+    forecaster), and non-trading dates are left NaN so no signal leaks across an
+    IPO or delisting.
     """
     min_periods = min_periods or lookback
-    any_df = next(iter(ohlcv_panel.values()))
-    dates = any_df.index
+    panel, dates = _aligned_panel(ohlcv_panel)
     eval_positions = range(min_periods - 1, len(dates), step)
 
     columns = {}
-    for ticker, df in ohlcv_panel.items():
+    for ticker, df in panel.items():
         values = {}
         for pos in eval_positions:
             window = df.iloc[max(0, pos - lookback + 1) : pos + 1]
-            values[dates[pos]] = forecaster(window)
+            if len(window) >= min_periods and not window.isnull().values.any():
+                values[dates[pos]] = forecaster(window)
         columns[ticker] = pd.Series(values)
 
     signal = pd.DataFrame(columns).reindex(dates).ffill()
+    trading = pd.DataFrame({t: panel[t]["close"] for t in panel}).notna()
+    signal = signal.where(trading)
     signal.index.name = "date"
     return signal
 

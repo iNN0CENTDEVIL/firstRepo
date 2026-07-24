@@ -94,6 +94,24 @@ def test_batched_builder_matches_per_stock():
     pd.testing.assert_frame_equal(single, batched)
 
 
+def test_per_stock_builder_handles_ragged_universe():
+    panel = generate_synthetic_ohlcv(n_stocks=3, n_days=400, seed=4)
+    a, b, c = list(panel)
+    panel[a].iloc[:350, :] = np.nan   # IPOs late
+    panel[b].iloc[151:, :] = np.nan   # delists after row 150
+
+    def spy(window):
+        assert not window.isnull().values.any()  # no NaN window reaches the forecaster
+        return float(window["close"].iloc[-1])
+
+    signal = build_forecast_signal(panel, spy, lookback=100, step=10)
+
+    assert signal[a].isna().all()
+    assert signal[b].notna().any()
+    assert pd.isna(signal[b].iloc[-1])
+    assert signal[c].notna().any()
+
+
 def test_batched_builder_handles_ragged_universe():
     panel = generate_synthetic_ohlcv(n_stocks=4, n_days=400, seed=3)
     a, b, c, d = list(panel)
