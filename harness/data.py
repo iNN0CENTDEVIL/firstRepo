@@ -54,3 +54,47 @@ def generate_synthetic_prices(
     dates = pd.bdate_range(start=start, periods=n_days, name="date")
     tickers = [f"S{i:04d}" for i in range(n_stocks)]
     return pd.DataFrame(prices, index=dates, columns=tickers)
+
+
+def generate_synthetic_ohlcv(
+    n_stocks: int = 60,
+    n_days: int = 900,
+    seed: int = 0,
+    start: str = "2018-01-01",
+) -> dict[str, pd.DataFrame]:
+    """Per-stock OHLCV panels sharing the persistent-trend closes of
+    `generate_synthetic_prices` (so momentum is still predictive). Returned as
+    `{ticker: DataFrame[open, high, low, close, volume, amount]}` -- the natural
+    input shape for a K-line forecaster such as Kronos.
+    """
+    rng = np.random.default_rng(seed)
+    closes = generate_synthetic_prices(n_stocks, n_days, seed=seed, start=start)
+
+    panel = {}
+    for ticker in closes.columns:
+        close = closes[ticker]
+        prev_close = close.shift(1).fillna(close.iloc[0])
+        open_ = prev_close * (1.0 + rng.normal(0.0, 0.002, n_days))
+        span = np.abs(rng.normal(0.0, 0.01, n_days)) * close
+        high = np.maximum(open_, close) + span
+        low = np.minimum(open_, close) - span
+        volume = rng.lognormal(mean=12.0, sigma=0.4, size=n_days)
+        panel[ticker] = pd.DataFrame(
+            {
+                "open": open_,
+                "high": high,
+                "low": low,
+                "close": close,
+                "volume": volume,
+                "amount": volume * close,
+            },
+            index=closes.index,
+        )
+    return panel
+
+
+def close_panel(ohlcv_panel: dict[str, pd.DataFrame]) -> pd.DataFrame:
+    """Collapse an OHLCV panel into the wide close-price frame the rest of the
+    harness consumes.
+    """
+    return pd.DataFrame({ticker: df["close"] for ticker, df in ohlcv_panel.items()})
