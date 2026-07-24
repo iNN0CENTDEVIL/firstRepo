@@ -67,9 +67,12 @@ inference samples help.
 
 - **The actual pretrained model is not run here.** It needs a HuggingFace download
   and a ~0.5B-param torch model; this sandbox's egress is limited to package
-  registries. `KronosForecaster` is written against the documented Kronos API —
-  confirm `predict()`'s exact signature against the installed package version
-  before live use.
+  registries. `KronosForecaster` is written against the **confirmed** Kronos API
+  (from github.com/shiyu-coder/Kronos): `KronosPredictor(model, tokenizer,
+  device=None, max_context=512)` and `predict(df, x_timestamp, y_timestamp,
+  pred_len, T=1.0, top_k=0, top_p=0.9, sample_count=1, verbose=True)`, where
+  `sample_count` averages that many rollouts internally (test-time scaling) and
+  the input df needs at least `[open, high, low, close]`.
 - **The tokenizer / pretraining is not reimplemented.** BSQ tokenization + a 12B-row
   pretraining run is the paper's core research contribution and out of scope; the
   point of integration is to *consume* the released model as a signal, not rebuild it.

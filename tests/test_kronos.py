@@ -8,6 +8,7 @@ from harness.data import close_panel, generate_synthetic_ohlcv
 from harness.kronos_signal import (
     build_forecast_signal,
     ensemble_forecast,
+    future_timestamps,
     trailing_return_forecaster,
 )
 from harness.metrics import forward_returns, rank_ic
@@ -42,6 +43,15 @@ def test_top_k_long_only_flat_signal_no_excess():
     fwd = _frame([[0.01, 0.01, 0.01, 0.01, 0.01]] * 30)
     out = top_k_long_only(sig, fwd, k=2)
     assert abs(out["aer"]) < 1e-12
+
+
+def test_future_timestamps_extends_calendar():
+    idx = pd.bdate_range("2020-01-01", periods=10)
+    fut = future_timestamps(idx, pred_len=3)
+    assert len(fut) == 3
+    assert (fut > idx[-1]).all()
+    # continues business-day cadence from the last historical date
+    assert fut.iloc[0] == idx[-1] + pd.offsets.BDay(1)
 
 
 def test_ensemble_forecast_averages():
